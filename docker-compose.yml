@@ -1,0 +1,36 @@
+services:
+  squid:
+    build: .
+    ports:
+      - "3128:3128"
+    environment:
+      SQUID_HTTP_PORT: "3128"
+      SQUID_VISIBLE_HOSTNAME: "squid"
+      SQUID_CACHE_MEM_MB: "256"
+      SQUID_MAX_OBJECT_SIZE_MB: "10"
+      # SQUID_EXTRA_LOCALNET: "203.0.113.0/24"
+      ENABLE_ANTIVIRUS: "true"
+      ICAP_BYPASS: "off"
+      ICAP_MAX_OBJECT_SIZE: "5M"
+      CLAMAV_DATABASE_MIRROR: "database.clamav.net"
+      CLAMAV_UPDATE_CHECKS: "24"
+      # SSL-bump (HTTPS interception/scanning) is off by default: it's a
+      # man-in-the-middle by design, clients must trust the generated CA.
+      # See the README before enabling.
+      ENABLE_SSL_BUMP: "false"
+      SSL_BUMP_CA_CN: "docker-squid AV Proxy CA"
+      SSL_BUMP_CA_DAYS: "3650"
+      # SSL_BUMP_SPLICE_DOMAINS: "example-bank.com pinned-app-api.example.com"
+    volumes:
+      # Persists the ClamAV signature database across container recreations,
+      # avoiding a ~200-300 MB re-download every time.
+      - clamav-db:/var/lib/clamav
+      # Persists the SSL-bump CA certificate/key across container
+      # recreations. Without this, a new CA is generated on every recreate
+      # and every client would need to re-import it.
+      - ssl-cert:/etc/squid/ssl_cert
+    restart: unless-stopped
+
+volumes:
+  clamav-db:
+  ssl-cert:

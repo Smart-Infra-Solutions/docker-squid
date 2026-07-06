@@ -1,0 +1,2 @@
+#!/bin/sh
+exec freshclam --daemon --foreground=true

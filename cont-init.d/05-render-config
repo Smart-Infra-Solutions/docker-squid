@@ -1,0 +1,96 @@
+#!/command/with-contenv sh
+
+set -e
+
+: "${SQUID_HTTP_PORT:=3128}"
+: "${SQUID_VISIBLE_HOSTNAME:=squid}"
+: "${SQUID_CACHE_MEM_MB:=256}"
+: "${SQUID_MAX_OBJECT_SIZE_MB:=10}"
+: "${SQUID_EXTRA_LOCALNET:=}"
+
+: "${ENABLE_ANTIVIRUS:=true}"
+: "${ICAP_BYPASS:=off}"
+: "${ICAP_MAX_OBJECT_SIZE:=5M}"
+
+: "${CLAMAV_DATABASE_MIRROR:=database.clamav.net}"
+: "${CLAMAV_UPDATE_CHECKS:=24}"
+
+: "${ENABLE_SSL_BUMP:=false}"
+: "${SSL_BUMP_SPLICE_DOMAINS:=}"
+
+if [ "$ENABLE_ANTIVIRUS" = "true" ]; then
+    icap_enable=on
+else
+    icap_enable=off
+fi
+
+# Extra "acl localnet src ..." lines, one per whitespace-separated CIDR in
+# SQUID_EXTRA_LOCALNET (e.g. "203.0.113.0/24 198.51.100.5").
+extra_localnet_file=$(mktemp)
+for net in $SQUID_EXTRA_LOCALNET; do
+    echo "acl localnet src $net" >> "$extra_localnet_file"
+done
+sed -i -e "/__SQUID_EXTRA_LOCALNET_ACLS__/{r $extra_localnet_file
+d}" /etc/squid/squid.conf
+rm -f "$extra_localnet_file"
+
+# http_port: plain, or with SSL-bump (TLS interception) options and our CA.
+http_port_file=$(mktemp)
+if [ "$ENABLE_SSL_BUMP" = "true" ]; then
+    echo "http_port ${SQUID_HTTP_PORT} ssl-bump generate-host-certificates=on dynamic_cert_mem_cache_size=4MB tls-cert=/etc/squid/ssl_cert/squidCA.pem tls-key=/etc/squid/ssl_cert/squidCA.key" > "$http_port_file"
+else
+    echo "http_port ${SQUID_HTTP_PORT}" > "$http_port_file"
+fi
+sed -i -e "/__SQUID_HTTP_PORT_LINE__/{r $http_port_file
+d}" /etc/squid/squid.conf
+rm -f "$http_port_file"
+
+# ssl_bump rules + cert generator helper, only rendered when enabled. Domains
+# listed in SSL_BUMP_SPLICE_DOMAINS are tunneled instead of intercepted (e.g.
+# sites that break under TLS interception due to certificate pinning).
+ssl_bump_file=$(mktemp)
+if [ "$ENABLE_SSL_BUMP" = "true" ]; then
+    splice_domains_conf=/etc/squid/ssl_bump_splice_domains.conf
+    : > "$splice_domains_conf"
+    for domain in $SSL_BUMP_SPLICE_DOMAINS; do
+        echo "$domain" >> "$splice_domains_conf"
+    done
+
+    {
+        echo "sslcrtd_program /usr/lib/squid/security_file_certgen -s /var/cache/squid/ssl_db -M 4MB"
+        echo "sslcrtd_children 5"
+        echo "acl step1 at_step SslBump1"
+        echo "acl sslBumpSpliceDomains dstdomain \"$splice_domains_conf\""
+        echo "ssl_bump peek step1"
+        echo "ssl_bump splice sslBumpSpliceDomains"
+        echo "ssl_bump bump all"
+    } > "$ssl_bump_file"
+fi
+sed -i -e "/__SSL_BUMP_CONFIG__/{r $ssl_bump_file
+d}" /etc/squid/squid.conf
+rm -f "$ssl_bump_file"
+
+sed -i \
+    -e "s|__SQUID_VISIBLE_HOSTNAME__|${SQUID_VISIBLE_HOSTNAME}|" \
+    -e "s|__SQUID_CACHE_MEM_MB__|${SQUID_CACHE_MEM_MB}|" \
+    -e "s|__SQUID_MAX_OBJECT_SIZE_MB__|${SQUID_MAX_OBJECT_SIZE_MB}|" \
+    -e "s|__ICAP_ENABLE__|${icap_enable}|" \
+    -e "s|__ICAP_BYPASS__|${ICAP_BYPASS}|" \
+    /etc/squid/squid.conf
+
+sed -i \
+    -e "s|__ICAP_MAX_OBJECT_SIZE__|${ICAP_MAX_OBJECT_SIZE}|" \
+    /etc/c-icap/virus_scan.conf
+
+sed -i \
+    -e "s|__CLAMAV_DATABASE_MIRROR__|${CLAMAV_DATABASE_MIRROR}|" \
+    -e "s|__CLAMAV_UPDATE_CHECKS__|${CLAMAV_UPDATE_CHECKS}|" \
+    /etc/clamav/freshclam.conf
+
+# When antivirus scanning is disabled, keep clamd/freshclam/c-icap from
+# auto-starting (s6 skips services whose directory contains a "down" file).
+if [ "$ENABLE_ANTIVIRUS" = "true" ]; then
+    rm -f /etc/services.d/clamd/down /etc/services.d/freshclam/down /etc/services.d/c-icap/down
+else
+    touch /etc/services.d/clamd/down /etc/services.d/freshclam/down /etc/services.d/c-icap/down
+fi

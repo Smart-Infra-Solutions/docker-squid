@@ -1,0 +1,9 @@
+#!/bin/sh
+
+# clamd_mod only checks connectivity to clamd once, at c-icap startup, and
+# never retries — if clamd is still loading its signature database at that
+# point, antivirus scanning silently stays disabled for the process
+# lifetime. Wait for clamd to actually answer before starting c-icap.
+clamdscan --ping 60:1 >/dev/null 2>&1
+
+exec c-icap -N -f /etc/c-icap/c-icap.conf

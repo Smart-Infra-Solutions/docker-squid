@@ -1,0 +1,43 @@
+#!/command/with-contenv sh
+
+set -e
+
+: "${ENABLE_SSL_BUMP:=false}"
+: "${SSL_BUMP_CA_CN:=docker-squid AV Proxy CA}"
+: "${SSL_BUMP_CA_DAYS:=3650}"
+
+CA_DIR=/etc/squid/ssl_cert
+DB_DIR=/var/cache/squid/ssl_db
+
+if [ "$ENABLE_SSL_BUMP" != "true" ]; then
+    echo "ENABLE_SSL_BUMP=false, skipping SSL-bump CA setup."
+    exit 0
+fi
+
+mkdir -p "$CA_DIR"
+
+# Generated once and expected to be persisted (mount a volume over
+# /etc/squid/ssl_cert): regenerating this CA on every restart would make
+# clients re-trust a new CA (and re-import it) every time.
+if [ ! -f "$CA_DIR/squidCA.pem" ] || [ ! -f "$CA_DIR/squidCA.key" ]; then
+    echo "Generating SSL-bump CA certificate (CN=${SSL_BUMP_CA_CN})..."
+    openssl req -new -newkey rsa:2048 -sha256 -days "$SSL_BUMP_CA_DAYS" -nodes -x509 \
+        -keyout "$CA_DIR/squidCA.key" \
+        -out "$CA_DIR/squidCA.pem" \
+        -subj "/CN=${SSL_BUMP_CA_CN}/O=docker-squid"
+fi
+
+chown -R squid:squid "$CA_DIR"
+chmod 700 "$CA_DIR"
+chmod 600 "$CA_DIR/squidCA.key"
+chmod 644 "$CA_DIR/squidCA.pem"
+
+# Database of dynamically-generated, per-site leaf certificates used by
+# generate-host-certificates. Must exist before squid's sslcrtd helpers start.
+# security_file_certgen -c creates $DB_DIR itself and errors out if it
+# already exists, so only call it the first time (e.g. before any volume
+# mounted over $DB_DIR has been initialized).
+if [ ! -d "$DB_DIR/certs" ]; then
+    /usr/lib/squid/security_file_certgen -c -s "$DB_DIR" -M 4MB
+fi
+chown -R squid:squid "$DB_DIR"

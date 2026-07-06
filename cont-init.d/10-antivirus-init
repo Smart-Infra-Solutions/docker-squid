@@ -1,0 +1,28 @@
+#!/command/with-contenv sh
+
+set -e
+
+: "${ENABLE_ANTIVIRUS:=true}"
+
+if [ "$ENABLE_ANTIVIRUS" != "true" ]; then
+    echo "ENABLE_ANTIVIRUS=false, skipping ClamAV/c-icap setup."
+    exit 0
+fi
+
+mkdir -p /run/clamav
+chown clamav:clamav /run/clamav
+chmod 750 /run/clamav
+
+mkdir -p /var/lib/clamav
+chown -R clamav:clamav /var/lib/clamav
+
+mkdir -p /run/c-icap /var/log/c-icap
+
+# clamd refuses to start with an empty database directory. Fetch an initial
+# copy synchronously so clamd can start right away; the freshclam service
+# then keeps it up to date (and retries on its own if this fetch fails, e.g.
+# no network yet).
+if [ -z "$(ls -A /var/lib/clamav 2>/dev/null)" ]; then
+    echo "No ClamAV database found, running initial freshclam fetch..."
+    freshclam --stdout || echo "Initial freshclam fetch failed, will keep retrying via the freshclam service."
+fi
