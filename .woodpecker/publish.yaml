@@ -2,7 +2,7 @@
 # manifests (no rebuild, so what is published is exactly what was tested):
 #   - push to the default branch: latest
 #   - git tag:                    <tag>
-# to ghcr.io/smart-infra-solutions/docker-squid and docker.io/smartinfrasolutions/squid.
+# One step per registry, so a Docker Hub failure does not block GHCR.
 #
 # Secrets: ghcr_username / ghcr_token, docker_token (Docker Hub).
 
@@ -14,15 +14,25 @@ when:
     branch: ${CI_REPO_DEFAULT_BRANCH}
 
 steps:
-  - name: promote
+  - name: publish-ghcr
     image: ghcr.io/regclient/regctl:v0.11.7-alpine
+    depends_on: []
     environment:
-      GHCR_USERNAME:
+      TARGET_REPO: ghcr.io/smart-infra-solutions/docker-squid
+      REGISTRY_USERNAME:
         from_secret: ghcr_username
-      GHCR_TOKEN:
+      REGISTRY_TOKEN:
         from_secret: ghcr_token
-      DOCKERHUB_USERNAME: smartinfrasolutions
-      DOCKERHUB_TOKEN:
+    commands:
+      - sh ci/promote.sh
+
+  - name: publish-dockerhub
+    image: ghcr.io/regclient/regctl:v0.11.7-alpine
+    depends_on: []
+    environment:
+      TARGET_REPO: docker.io/smartinfrasolutions/squid
+      REGISTRY_USERNAME: smartinfrasolutions
+      REGISTRY_TOKEN:
         from_secret: docker_token
     commands:
       - sh ci/promote.sh
