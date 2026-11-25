@@ -1,5 +1,13 @@
+# Lints, then builds the multi-arch image and pushes it to GHCR under a
+# per-commit tag (sha-<commit>). That exact image is then smoke-tested
+# (test.yaml) and, on the default branch or a tag, promoted to its public
+# tags (publish.yaml) without being rebuilt.
+#
+# Secrets: ghcr_username / ghcr_token (GitHub PAT with write:packages),
+# enabled for the push, tag and pull_request events.
+
 when:
-  - event: [pull_request, tag]
+  - event: [pull_request, tag, manual]
   - event: push
     branch:
       - ${CI_REPO_DEFAULT_BRANCH}
@@ -8,22 +16,32 @@ when:
 variables:
   - &buildx_plugin 'docker.io/woodpeckerci/plugin-docker-buildx'
   - &platforms_alpine 'linux/arm64/v8,linux/amd64'
-  - publish_logins: &publish_logins
-      - registry: https://index.docker.io/v1/
-        username: smartinfrasolutions
-        password:
-          from_secret: docker_token
-  - &publish_repos 'smartinfrasolutions/squid'
+  - &ghcr_repo 'ghcr.io/smart-infra-solutions/docker-squid'
 
 steps:
+  - name: hadolint
+    image: docker.io/hadolint/hadolint:latest-alpine
+    depends_on: []
+    commands:
+      - hadolint Dockerfile
+
+  - name: shellcheck
+    image: docker.io/koalaman/shellcheck-alpine:stable
+    depends_on: []
+    commands:
+      - shellcheck --shell=sh start-squid.sh cont-init.d/* services.d/*/run tests/*.sh ci/*.sh
 
   - name: build-squid
     image: *buildx_plugin
+    depends_on: [hadolint, shellcheck]
     settings:
-      repo: *publish_repos
+      repo: *ghcr_repo
       dockerfile: Dockerfile
       platforms: *platforms_alpine
-      tag: [latest]
-      logins: *publish_logins
-    when:
-      - event: [pull_request, push]
+      tag: sha-${CI_COMMIT_SHA}
+      logins:
+        - registry: ghcr.io
+          username:
+            from_secret: ghcr_username
+          password:
+            from_secret: ghcr_token

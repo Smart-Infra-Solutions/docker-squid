@@ -1,0 +1,28 @@
+# Promotes the tested image (sha-<commit>) to its public tags, by copying the
+# manifests (no rebuild, so what is published is exactly what was tested):
+#   - push to the default branch: latest
+#   - git tag:                    <tag>
+# to ghcr.io/smart-infra-solutions/docker-squid and docker.io/smartinfrasolutions/squid.
+#
+# Secrets: ghcr_username / ghcr_token, docker_token (Docker Hub).
+
+depends_on: [test]
+
+when:
+  - event: tag
+  - event: push
+    branch: ${CI_REPO_DEFAULT_BRANCH}
+
+steps:
+  - name: promote
+    image: ghcr.io/regclient/regctl:v0.11.7-alpine
+    environment:
+      GHCR_USERNAME:
+        from_secret: ghcr_username
+      GHCR_TOKEN:
+        from_secret: ghcr_token
+      DOCKERHUB_USERNAME: smartinfrasolutions
+      DOCKERHUB_TOKEN:
+        from_secret: docker_token
+    commands:
+      - sh ci/promote.sh

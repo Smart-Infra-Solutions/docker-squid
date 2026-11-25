@@ -1,0 +1,25 @@
+# Runs the image built by docker.yaml (ghcr.io/...:sha-<commit>) as a service
+# and checks it end to end with tests/smoke.sh: proxying, antivirus blocking
+# (EICAR test file) and access rules. Run it locally with tests/run-local.sh.
+
+depends_on: [docker]
+
+when:
+  - event: [pull_request, tag, manual]
+  - event: push
+    branch:
+      - ${CI_REPO_DEFAULT_BRANCH}
+      - renovate/*
+
+services:
+  - name: squid
+    image: ghcr.io/smart-infra-solutions/docker-squid:sha-${CI_COMMIT_SHA}
+
+steps:
+  - name: smoke-test
+    image: docker.io/library/alpine:3.24
+    environment:
+      PROXY: http://squid:3128
+    commands:
+      - apk add --no-cache -q curl busybox-extras
+      - sh tests/smoke.sh

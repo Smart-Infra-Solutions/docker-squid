@@ -1,0 +1,11 @@
+# hadolint configuration (run in CI, see .woodpecker/docker.yaml).
+ignored:
+  # Pinning every apk package version breaks the build as soon as Alpine ships
+  # a security update; the base image tag is pinned instead.
+  - DL3018
+  # The s6-overlay image is a full Alpine filesystem by design.
+  - DL3067
+  # The c-icap source builds cd into their extracted tarball directory.
+  - DL3003
+  # HEALTHCHECK needs a shell for its "|| kill 1" fallback.
+  - DL3025
