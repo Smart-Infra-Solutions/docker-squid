@@ -23,12 +23,22 @@ content scanning** (ClamAV via c-icap/ICAP).
 
 ## Quick start
 
+The image is published for `linux/amd64` and `linux/arm64` on the GitHub Container
+Registry as `ghcr.io/smart-infra-solutions/docker-squid` (and on Docker Hub as
+`smartinfrasolutions/squid`), with these tags:
+
+| Tag            | Content                                                     |
+| -------------- | ----------------------------------------------------------- |
+| `latest`       | Latest tested build of the `main` branch.                   |
+| `<git tag>`    | A release, e.g. `v1.0.0`.                                   |
+| `sha-<commit>` | The build of a given commit (including pull requests).      |
+
 ```bash
 docker run -d \
   --name squid \
   -p 3128:3128 \
   -v squid-clamav-db:/var/lib/clamav \
-  ghcr.io/<you>/docker-squid:latest
+  ghcr.io/smart-infra-solutions/docker-squid:latest
 ```
 
 Point a client at `http://<host>:3128` as its HTTP/HTTPS proxy. Plain HTTP responses are
@@ -145,3 +155,21 @@ docker build -t docker-squid .
 
 c-icap and c-icap-modules are compiled from source in a dedicated build stage (they aren't
 packaged for Alpine); only the resulting binaries are copied into the final image.
+
+## Tests and CI
+
+`tests/smoke.sh` checks a running container end to end: a clean file goes through the
+proxy unchanged, the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/)
+is blocked by the antivirus, and `CONNECT` to a non-SSL port is denied. To build the image
+and run it locally (needs Docker; the first start downloads the ClamAV database, so allow a
+few minutes):
+
+```bash
+tests/run-local.sh
+```
+
+The Woodpecker pipeline (`.woodpecker/`) lints the `Dockerfile` (hadolint) and the shell
+scripts (shellcheck), builds the multi-arch image and pushes it as `sha-<commit>`, runs the
+smoke test against that image, then, on `main` or a git tag, publishes the very same image
+as `latest` / `<tag>` (copied, not rebuilt). Dependabot keeps the pinned base images
+(`alpine`, `crazymax/alpine-s6`) up to date.

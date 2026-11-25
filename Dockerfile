@@ -1,6 +1,11 @@
-FROM alpine:latest AS base
+# Pinned (not :latest) so builds are reproducible; Dependabot opens a PR when
+# a newer tag is published (see .github/dependabot.yml). Keep both on the same
+# Alpine release, since the s6 image's whole filesystem is copied over the base.
+FROM crazymax/alpine-s6:3.24-3.2.3.0 AS s6
 
-COPY --from=crazymax/alpine-s6 / /
+FROM alpine:3.24 AS base
+
+COPY --from=s6 / /
 
 RUN apk update \
     && apk add --no-cache curl xz squid clamav clamav-daemon libatomic openssl \
@@ -40,6 +45,9 @@ RUN curl -LO "https://downloads.sourceforge.net/project/c-icap/c-icap-modules/0.
 # ---
 
 FROM base AS final
+
+# Links the image published on ghcr.io to this repository (README, visibility).
+LABEL org.opencontainers.image.source="https://github.com/Smart-Infra-Solutions/docker-squid"       org.opencontainers.image.description="Squid proxy with ClamAV/c-icap antivirus scanning and optional SSL-bump"       org.opencontainers.image.title="docker-squid"
 
 COPY --from=icap-builder /out/usr/ /usr/
 COPY --from=icap-builder /out/etc/c-icap/ /etc/c-icap/
