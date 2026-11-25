@@ -19,7 +19,7 @@ content scanning** (ClamAV via c-icap/ICAP).
 - Process supervision via [s6-overlay](https://github.com/just-containers/s6-overlay).
 - Most of the behavior above is configurable through environment variables (see below) —
   no need to fork the image or hand-edit config files for common changes.
-- A `HEALTHCHECK` that verifies outbound connectivity through the proxy.
+- A `HEALTHCHECK` that verifies the container still has outbound connectivity.
 
 ## Quick start
 
@@ -41,13 +41,19 @@ docker run -d \
   ghcr.io/smart-infra-solutions/docker-squid:latest
 ```
 
-Point a client at `http://<host>:3128` as its HTTP/HTTPS proxy. Plain HTTP responses are
-scanned for malware; a response containing a virus (or the
-[EICAR test file](https://www.eicar.org/download-anti-malware-testfile/)) is blocked with
-an HTTP error instead of being delivered.
+Point a client at `http://<host>:3128` as its HTTP/HTTPS proxy. Plain HTTP downloads and
+uploads are scanned for malware; a file containing a virus (or the
+[EICAR test file](https://www.eicar.org/download-anti-malware-testfile/)) is replaced by an
+HTTP 403 "VIRUS FOUND" page. HTTPS is only scanned with SSL-bump enabled, see
+[How the antivirus scanning works](#how-the-antivirus-scanning-works).
 
-The `/var/lib/clamav` volume isn't required, but without it the ~200-300 MB virus
-signature database is re-downloaded from scratch on every container start.
+The `/var/lib/clamav` volume isn't required, but without it the ClamAV signature database
+(~100-200 MB) is re-downloaded from scratch on every container start.
+
+On first start, the proxy only starts listening once the signature database has been
+downloaded and the antivirus is ready (typically 30 s to a few minutes, depending on the
+network). Plan for **about 1.2 GB of RAM**, almost all of it used by `clamd` to hold the
+signatures in memory; set `ENABLE_ANTIVIRUS=false` to run a plain Squid proxy without it.
 
 ## docker-compose
 
@@ -95,11 +101,31 @@ client -> Squid (:3128) -> [ICAP REQMOD/RESPMOD] -> c-icap (:1344, loopback only
   (`icap_service` + `adaptation_access` in `squid.conf`).
 - c-icap's `virus_scan` module (from `c-icap-modules`) forwards the content to `clamd` for
   scanning and either passes it through unmodified or substitutes a block page.
-- `freshclam` keeps the ClamAV signature database up to date in the background.
+- `freshclam` keeps the ClamAV signature database up to date in the background
+  (`CLAMAV_UPDATE_CHECKS` times a day, from `CLAMAV_DATABASE_MIRROR`).
+
+What gets scanned:
+
+| Traffic                                     | Scanned?                                                                 |
+| ------------------------------------------- | ------------------------------------------------------------------------ |
+| Plain HTTP downloads (responses, RESPMOD)   | Yes.                                                                     |
+| Plain HTTP uploads (request bodies, REQMOD) | Yes.                                                                     |
+| HTTPS (`CONNECT` tunnels)                   | Only with `ENABLE_SSL_BUMP=true`, see [below](#ssl-bump-https-scanning). |
+| Objects larger than `ICAP_MAX_OBJECT_SIZE`  | No, passed through unscanned (default `5M`).                             |
 
 **By default, scanning applies to plain HTTP traffic only.** HTTPS traffic tunneled via
 `CONNECT` isn't inspected, since Squid can't hand encrypted bytes to ICAP without
 decrypting the connection first — that's what SSL-bump (below) is for.
+
+- **Infected content is blocked**: the client gets an **HTTP 403** "VIRUS FOUND" page from
+  c-icap, naming the detected signature, instead of the file.
+- **Fail closed by default** (`ICAP_BYPASS=off`): if c-icap or clamd is down, requests
+  fail with an error rather than going through unscanned. Set `ICAP_BYPASS=on` to favor
+  availability over protection.
+- **Startup order is enforced** so scanning is never silently off: `clamd` waits for a
+  signature database, c-icap waits for `clamd` to answer, and Squid waits for c-icap.
+- **Logs** inside the container: `/var/log/squid/` (`access.log`, `cache.log`) and
+  `/var/log/c-icap/` (`access.log`, `server.log`).
 
 ## SSL-bump (HTTPS scanning)
 
@@ -135,17 +161,25 @@ every client would need to re-import it.
 
 ## Testing that scanning actually works
 
+The simplest check is the automated smoke test: it serves the
+[EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) (a standard,
+harmless antivirus test string) over plain HTTP and expects it to be blocked, see
+[Tests and CI](#tests-and-ci).
+
+By hand:
+
 ```bash
-# Should pass through untouched:
+# Should pass through untouched (200):
 curl -x http://<host>:3128 http://example.com/ -o /dev/null -w '%{http_code}\n'
 
-# Should be blocked (the EICAR test file is a standard, harmless antivirus test string):
-curl -x http://<host>:3128 https://secure.eicar.org/eicar.com.txt -o /dev/null -w '%{http_code}\n'
+# Should be blocked (403), but only with ENABLE_SSL_BUMP=true, since this URL is HTTPS
+# (--cacert is not needed if squidCA.pem is installed in the system trust store):
+curl -x http://<host>:3128 --cacert ./squidCA.pem \
+  https://secure.eicar.org/eicar.com.txt -o /dev/null -w '%{http_code}\n'
 ```
 
-With `ENABLE_SSL_BUMP=true`, the same commands scan HTTPS URLs too, provided the client
-trusts `squidCA.pem` (or add `--cacert ./squidCA.pem` to the `curl` calls above instead of
-installing it system-wide).
+Without SSL-bump, that HTTPS download goes through the `CONNECT` tunnel unscanned and
+returns 200: that's expected, not a sign that the antivirus is broken.
 
 ## Building locally
 
